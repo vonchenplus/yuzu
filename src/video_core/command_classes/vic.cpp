@@ -3,17 +3,27 @@
 // Refer to the license.txt file included.
 
 #include <array>
+
+extern "C" {
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wconversion"
+#endif
+#include <libswscale/swscale.h>
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+}
+
 #include "common/assert.h"
+#include "common/logging/log.h"
+
 #include "video_core/command_classes/nvdec.h"
 #include "video_core/command_classes/vic.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/gpu.h"
 #include "video_core/memory_manager.h"
 #include "video_core/textures/decoders.h"
-
-extern "C" {
-#include <libswscale/swscale.h>
-}
 
 namespace Tegra {
 

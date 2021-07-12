@@ -244,7 +244,8 @@ void GameList::OnUpdateThemedIcons() {
     for (int i = 0; i < item_model->invisibleRootItem()->rowCount(); i++) {
         QStandardItem* child = item_model->invisibleRootItem()->child(i);
 
-        const int icon_size = std::min(static_cast<int>(UISettings::values.icon_size), 64);
+        const int icon_size =
+            std::min(static_cast<int>(UISettings::values.icon_size.GetValue()), 64);
         switch (child->data(GameListItem::TypeRole).value<GameListItemType>()) {
         case GameListItemType::SdmcDir:
             child->setData(
@@ -521,7 +522,9 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     QAction* remove_custom_config = remove_menu->addAction(tr("Remove Custom Configuration"));
     remove_menu->addSeparator();
     QAction* remove_all_content = remove_menu->addAction(tr("Remove All Installed Contents"));
-    QAction* dump_romfs = context_menu.addAction(tr("Dump RomFS"));
+    QMenu* dump_romfs_menu = context_menu.addMenu(tr("Dump RomFS"));
+    QAction* dump_romfs = dump_romfs_menu->addAction(tr("Dump RomFS"));
+    QAction* dump_romfs_sdmc = dump_romfs_menu->addAction(tr("Dump RomFS to SDMC"));
     QAction* copy_tid = context_menu.addAction(tr("Copy Title ID to Clipboard"));
     QAction* navigate_to_gamedb_entry = context_menu.addAction(tr("Navigate to GameDB entry"));
     context_menu.addSeparator();
@@ -570,8 +573,12 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     connect(remove_custom_config, &QAction::triggered, [this, program_id, path]() {
         emit RemoveFileRequested(program_id, GameListRemoveTarget::CustomConfiguration, path);
     });
-    connect(dump_romfs, &QAction::triggered,
-            [this, program_id, path]() { emit DumpRomFSRequested(program_id, path); });
+    connect(dump_romfs, &QAction::triggered, [this, program_id, path]() {
+        emit DumpRomFSRequested(program_id, path, DumpRomFSTarget::Normal);
+    });
+    connect(dump_romfs_sdmc, &QAction::triggered, [this, program_id, path]() {
+        emit DumpRomFSRequested(program_id, path, DumpRomFSTarget::SDMC);
+    });
     connect(copy_tid, &QAction::triggered,
             [this, program_id]() { emit CopyTIDRequested(program_id); });
     connect(navigate_to_gamedb_entry, &QAction::triggered, [this, program_id]() {

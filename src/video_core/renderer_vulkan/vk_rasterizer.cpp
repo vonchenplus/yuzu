@@ -557,6 +557,13 @@ void RasterizerVulkan::UnmapMemory(VAddr addr, u64 size) {
     pipeline_cache.OnCPUWrite(addr, size);
 }
 
+void RasterizerVulkan::ModifyGPUMemory(GPUVAddr addr, u64 size) {
+    {
+        std::scoped_lock lock{texture_cache.mutex};
+        texture_cache.UnmapGPUMemory(addr, size);
+    }
+}
+
 void RasterizerVulkan::SignalSemaphore(GPUVAddr addr, u32 value) {
     if (!gpu.IsAsync()) {
         gpu_memory.Write<u32>(addr, value);
@@ -571,6 +578,13 @@ void RasterizerVulkan::SignalSyncPoint(u32 value) {
         return;
     }
     fence_manager.SignalSyncPoint(value);
+}
+
+void RasterizerVulkan::SignalReference() {
+    if (!gpu.IsAsync()) {
+        return;
+    }
+    fence_manager.SignalOrdering();
 }
 
 void RasterizerVulkan::ReleaseFences() {
@@ -605,6 +619,7 @@ void RasterizerVulkan::WaitForIdle() {
         cmdbuf.SetEvent(event, flags);
         cmdbuf.WaitEvents(event, flags, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, {}, {}, {});
     });
+    SignalReference();
 }
 
 void RasterizerVulkan::FragmentBarrier() {

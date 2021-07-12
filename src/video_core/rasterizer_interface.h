@@ -63,6 +63,9 @@ public:
     /// Signal a GPU based syncpoint as a fence
     virtual void SignalSyncPoint(u32 value) = 0;
 
+    /// Signal a GPU based reference as point
+    virtual void SignalReference() = 0;
+
     /// Release all pending fences.
     virtual void ReleaseFences() = 0;
 
@@ -86,6 +89,9 @@ public:
 
     /// Unmap memory range
     virtual void UnmapMemory(VAddr addr, u64 size) = 0;
+
+    /// Remap GPU memory range. This means underneath backing memory changed
+    virtual void ModifyGPUMemory(GPUVAddr addr, u64 size) = 0;
 
     /// Notify rasterizer that any caches of the specified region should be flushed to Switch memory
     /// and invalidated

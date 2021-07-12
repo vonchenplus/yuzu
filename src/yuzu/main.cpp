@@ -104,6 +104,7 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "input_common/main.h"
 #include "util/overlay_dialog.h"
 #include "video_core/gpu.h"
+#include "video_core/renderer_base.h"
 #include "video_core/shader_notify.h"
 #include "yuzu/about_dialog.h"
 #include "yuzu/bootmanager.h"
@@ -155,11 +156,13 @@ enum class CalloutFlag : uint32_t {
 };
 
 void GMainWindow::ShowTelemetryCallout() {
-    if (UISettings::values.callout_flags & static_cast<uint32_t>(CalloutFlag::Telemetry)) {
+    if (UISettings::values.callout_flags.GetValue() &
+        static_cast<uint32_t>(CalloutFlag::Telemetry)) {
         return;
     }
 
-    UISettings::values.callout_flags |= static_cast<uint32_t>(CalloutFlag::Telemetry);
+    UISettings::values.callout_flags =
+        UISettings::values.callout_flags.GetValue() | static_cast<uint32_t>(CalloutFlag::Telemetry);
     const QString telemetry_message =
         tr("<a href='https://yuzu-emu.org/help/feature/telemetry/'>Anonymous "
            "data is collected</a> to help improve yuzu. "
@@ -176,7 +179,7 @@ static void InitializeLogging() {
     using namespace Common;
 
     Log::Filter log_filter;
-    log_filter.ParseFilterString(Settings::values.log_filter);
+    log_filter.ParseFilterString(Settings::values.log_filter.GetValue());
     Log::SetGlobalFilter(log_filter);
 
     const auto log_dir = FS::GetYuzuPath(FS::YuzuPath::LogDir);
@@ -215,7 +218,7 @@ GMainWindow::GMainWindow()
     default_theme_paths = QIcon::themeSearchPaths();
     UpdateUITheme();
 
-    SetDiscordEnabled(UISettings::values.enable_discord_presence);
+    SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
     discord_rpc->Update();
 
     RegisterMetaTypes();
@@ -1059,23 +1062,24 @@ void GMainWindow::RestoreUIState() {
     render_window->restoreGeometry(UISettings::values.renderwindow_geometry);
 #if MICROPROFILE_ENABLED
     microProfileDialog->restoreGeometry(UISettings::values.microprofile_geometry);
-    microProfileDialog->setVisible(UISettings::values.microprofile_visible);
+    microProfileDialog->setVisible(UISettings::values.microprofile_visible.GetValue());
 #endif
 
     game_list->LoadInterfaceLayout();
 
-    ui.action_Single_Window_Mode->setChecked(UISettings::values.single_window_mode);
+    ui.action_Single_Window_Mode->setChecked(UISettings::values.single_window_mode.GetValue());
     ToggleWindowMode();
 
-    ui.action_Fullscreen->setChecked(UISettings::values.fullscreen);
+    ui.action_Fullscreen->setChecked(UISettings::values.fullscreen.GetValue());
 
-    ui.action_Display_Dock_Widget_Headers->setChecked(UISettings::values.display_titlebar);
+    ui.action_Display_Dock_Widget_Headers->setChecked(
+        UISettings::values.display_titlebar.GetValue());
     OnDisplayTitleBars(ui.action_Display_Dock_Widget_Headers->isChecked());
 
-    ui.action_Show_Filter_Bar->setChecked(UISettings::values.show_filter_bar);
+    ui.action_Show_Filter_Bar->setChecked(UISettings::values.show_filter_bar.GetValue());
     game_list->SetFilterVisible(ui.action_Show_Filter_Bar->isChecked());
 
-    ui.action_Show_Status_Bar->setChecked(UISettings::values.show_status_bar);
+    ui.action_Show_Status_Bar->setChecked(UISettings::values.show_status_bar.GetValue());
     statusBar()->setVisible(ui.action_Show_Status_Bar->isChecked());
     Debugger::ToggleConsole();
 }
@@ -1242,13 +1246,14 @@ bool GMainWindow::LoadROM(const QString& filename, std::size_t program_index) {
     const Core::System::ResultStatus result{
         system.Load(*render_window, filename.toStdString(), program_index)};
 
-    const auto drd_callout =
-        (UISettings::values.callout_flags & static_cast<u32>(CalloutFlag::DRDDeprecation)) == 0;
+    const auto drd_callout = (UISettings::values.callout_flags.GetValue() &
+                              static_cast<u32>(CalloutFlag::DRDDeprecation)) == 0;
 
     if (result == Core::System::ResultStatus::Success &&
         system.GetAppLoader().GetFileType() == Loader::FileType::DeconstructedRomDirectory &&
         drd_callout) {
-        UISettings::values.callout_flags |= static_cast<u32>(CalloutFlag::DRDDeprecation);
+        UISettings::values.callout_flags = UISettings::values.callout_flags.GetValue() |
+                                           static_cast<u32>(CalloutFlag::DRDDeprecation);
         QMessageBox::warning(
             this, tr("Warning Outdated Game Format"),
             tr("You are using the deconstructed ROM directory format for this game, which is an "
@@ -1350,6 +1355,9 @@ void GMainWindow::BootGame(const QString& filename, std::size_t program_index, S
 
     ConfigureVibration::SetAllVibrationDevices();
 
+    // Disable fps limit toggle when booting a new title
+    Settings::values.disable_fps_limit.SetValue(false);
+
     // Save configurations
     UpdateUISettings();
     game_list->SaveInterfaceLayout();
@@ -1422,8 +1430,12 @@ void GMainWindow::BootGame(const QString& filename, std::size_t program_index, S
         title_name = Common::FS::PathToUTF8String(
             std::filesystem::path{filename.toStdU16String()}.filename());
     }
+    const bool is_64bit = system.Kernel().CurrentProcess()->Is64BitProcess();
+    const auto instruction_set_suffix = is_64bit ? " (64-bit)" : " (32-bit)";
+    title_name += instruction_set_suffix;
     LOG_INFO(Frontend, "Booting game: {:016X} | {} | {}", title_id, title_name, title_version);
-    UpdateWindowTitle(title_name, title_version);
+    const auto gpu_vendor = system.GPU().Renderer().GetDeviceVendor();
+    UpdateWindowTitle(title_name, title_version, gpu_vendor);
 
     loading_screen->Prepare(system.GetAppLoader());
     loading_screen->show();
@@ -1877,7 +1889,8 @@ void GMainWindow::RemoveCustomConfiguration(u64 program_id, const std::string& g
     }
 }
 
-void GMainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_path) {
+void GMainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_path,
+                                      DumpRomFSTarget target) {
     const auto failed = [this] {
         QMessageBox::warning(this, tr("RomFS Extraction Failed!"),
                              tr("There was an error copying the RomFS files or the user "
@@ -1905,7 +1918,10 @@ void GMainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_pa
         return;
     }
 
-    const auto dump_dir = Common::FS::GetYuzuPath(Common::FS::YuzuPath::DumpDir);
+    const auto dump_dir =
+        target == DumpRomFSTarget::Normal
+            ? Common::FS::GetYuzuPath(Common::FS::YuzuPath::DumpDir)
+            : Common::FS::GetYuzuPath(Common::FS::YuzuPath::SDMCDir) / "atmosphere" / "contents";
     const auto romfs_dir = fmt::format("{:016X}/romfs", *romfs_title_id);
 
     const auto path = Common::FS::PathToUTF8String(dump_dir / romfs_dir);
@@ -1915,7 +1931,8 @@ void GMainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_pa
     if (*romfs_title_id == program_id) {
         const u64 ivfc_offset = loader->ReadRomFSIVFCOffset();
         const FileSys::PatchManager pm{program_id, system.GetFileSystemController(), installed};
-        romfs = pm.PatchRomFS(file, ivfc_offset, FileSys::ContentRecordType::Program);
+        romfs =
+            pm.PatchRomFS(file, ivfc_offset, FileSys::ContentRecordType::Program, nullptr, false);
     } else {
         romfs = installed.GetEntry(*romfs_title_id, FileSys::ContentRecordType::Data)->GetRomFS();
     }
@@ -2443,7 +2460,8 @@ void GMainWindow::ErrorDisplayDisplayError(QString error_code, QString error_tex
 }
 
 void GMainWindow::OnMenuReportCompatibility() {
-    if (!Settings::values.yuzu_token.empty() && !Settings::values.yuzu_username.empty()) {
+    if (!Settings::values.yuzu_token.GetValue().empty() &&
+        !Settings::values.yuzu_username.GetValue().empty()) {
         CompatDB compatdb{this};
         compatdb.exec();
     } else {
@@ -2608,7 +2626,7 @@ void GMainWindow::ResetWindowSize1080() {
 
 void GMainWindow::OnConfigure() {
     const auto old_theme = UISettings::values.theme;
-    const bool old_discord_presence = UISettings::values.enable_discord_presence;
+    const bool old_discord_presence = UISettings::values.enable_discord_presence.GetValue();
 
     ConfigureDialog configure_dialog(this, hotkey_registry, input_subsystem.get());
     connect(&configure_dialog, &ConfigureDialog::LanguageChanged, this,
@@ -2665,8 +2683,8 @@ void GMainWindow::OnConfigure() {
     if (UISettings::values.theme != old_theme) {
         UpdateUITheme();
     }
-    if (UISettings::values.enable_discord_presence != old_discord_presence) {
-        SetDiscordEnabled(UISettings::values.enable_discord_presence);
+    if (UISettings::values.enable_discord_presence.GetValue() != old_discord_presence) {
+        SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
     }
     emit UpdateThemedIcons();
 
@@ -2822,7 +2840,8 @@ void GMainWindow::OnCaptureScreenshot() {
         }
     }
 #endif
-    render_window->CaptureScreenshot(UISettings::values.screenshot_resolution_factor, filename);
+    render_window->CaptureScreenshot(UISettings::values.screenshot_resolution_factor.GetValue(),
+                                     filename);
     OnStartGame();
 }
 
@@ -2852,8 +2871,8 @@ void GMainWindow::MigrateConfigFiles() {
     }
 }
 
-void GMainWindow::UpdateWindowTitle(const std::string& title_name,
-                                    const std::string& title_version) {
+void GMainWindow::UpdateWindowTitle(std::string_view title_name, std::string_view title_version,
+                                    std::string_view gpu_vendor) {
     const auto branch_name = std::string(Common::g_scm_branch);
     const auto description = std::string(Common::g_scm_desc);
     const auto build_id = std::string(Common::g_build_id);
@@ -2866,7 +2885,8 @@ void GMainWindow::UpdateWindowTitle(const std::string& title_name,
     if (title_name.empty()) {
         setWindowTitle(QString::fromStdString(window_title));
     } else {
-        const auto run_title = fmt::format("{} | {} | {}", window_title, title_name, title_version);
+        const auto run_title =
+            fmt::format("{} | {} | {} | {}", window_title, title_name, title_version, gpu_vendor);
         setWindowTitle(QString::fromStdString(run_title));
     }
 }
@@ -2896,7 +2916,12 @@ void GMainWindow::UpdateStatusBar() {
     } else {
         emu_speed_label->setText(tr("Speed: %1%").arg(results.emulation_speed * 100.0, 0, 'f', 0));
     }
-    game_fps_label->setText(tr("Game: %1 FPS").arg(results.average_game_fps, 0, 'f', 0));
+    if (Settings::values.disable_fps_limit) {
+        game_fps_label->setText(
+            tr("Game: %1 FPS (Limit off)").arg(results.average_game_fps, 0, 'f', 0));
+    } else {
+        game_fps_label->setText(tr("Game: %1 FPS").arg(results.average_game_fps, 0, 'f', 0));
+    }
     emu_frametime_label->setText(tr("Frame: %1 ms").arg(results.frametime * 1000.0, 0, 'f', 2));
 
     emu_speed_label->setVisible(!Settings::values.use_multi_core.GetValue());
